@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Interactive Docker Terminal</title>
+
+  <style>
+    body {
+      margin: 0;
+      background: #0f172a;
+      color: #e5e7eb;
+      font-family: monospace;
+      display: flex;
+      height: 100vh;
+    }
+
+    #editor {
+      width: 60%;
+      height: 100%;
+    }
+
+    #terminal {
+      width: 40%;
+      display: flex;
+      flex-direction: column;
+      border-left: 1px solid #334155;
+    }
+
+    #terminal-header {
+      padding: 10px;
+      background: #020617;
+      border-bottom: 1px solid #334155;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    #lang-buttons {
+      display: flex;
+      gap: 6px;
+    }
+
+    .lang-btn {
+      background: #1e293b;
+      color: #e5e7eb;
+      border: 1px solid #334155;
+      padding: 4px 8px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .lang-btn.active {
+      background: #22c55e;
+      color: black;
+      font-weight: bold;
+    }
+
+    #runBtn {
+      background: #22c55e;
+      color: black;
+      border: none;
+      padding: 6px 12px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+
+    #output {
+      flex: 1;
+      padding: 12px;
+      background: #020617;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+
+    .cursor {
+      background: #e5e7eb;
+      color: #020617;
+    }
+  </style>
+
+  <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs/loader.js"></script>
+</head>
+<body>
+
+<div id="editor"></div>
+
+<div id="terminal">
+  <div id="terminal-header">
+    <div id="lang-buttons">
+      <button class="lang-btn active" data-lang="python">Python</button>
+      <button class="lang-btn" data-lang="javascript">JS</button>
+      <button class="lang-btn" data-lang="cpp">C++</button>
+    </div>
+    <button id="runBtn" type="button">▶ Start</button>
+  </div>
+  <pre id="output"></pre>
+</div>
+
+<script>
+  let editor;
+  let selectedLanguage = "python";
+
+  const outputEl = document.getElementById("output");
+  const runBtn = document.getElementById("runBtn");
+  const langButtons = document.querySelectorAll(".lang-btn");
+
+  let socket = null;
+  let inputBuffer = "";
+  let waitingForInput = false;
+
+  /* ===============================
+     MONACO INIT
+  =============================== */
+  require.config({
+    paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.45.0/min/vs" }
+  });
+
+  require(["vs/editor/editor.main"], () => {
+    editor = monaco.editor.create(document.getElementById("editor"), {
+      value:
+`# Write code below ❤️
+
+a = input("hello: ")
+print(a)`,
+      language: "python",
+      theme: "vs-dark",
+      fontSize: 14,
+      automaticLayout: true
+    });
+  });
+
+  /* ===============================
+     LANGUAGE SWITCHING
+  =============================== */
+  langButtons.forEach(btn => {
+    btn.onclick = () => {
+      langButtons.forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+
+      selectedLanguage = btn.dataset.lang;
+
+      // Switch Monaco language
+      monaco.editor.setModelLanguage(
+        editor.getModel(),
+        selectedLanguage === "cpp" ? "cpp" : selectedLanguage
+      );
+    };
+  });
+
+  /* ===============================
+     TERMINAL HELPERS
+  =============================== */
+  function removeCursor() {
+    const c = outputEl.querySelector(".cursor");
+    if (c) c.remove();
+  }
+
+  function renderCursor() {
+    removeCursor();
+    const span = document.createElement("span");
+    span.className = "cursor";
+    span.textContent = "█";
+    outputEl.appendChild(span);
+  }
+
+  function write(text) {
+    removeCursor();
+    outputEl.textContent += text;
+    outputEl.scrollTop = outputEl.scrollHeight;
+    if (waitingForInput) renderCursor();
+  }
+
+  function resetTerminal() {
+    outputEl.textContent = "";
+    inputBuffer = "";
+    waitingForInput = false;
+  }
+
+  /* ===============================
+     START SESSION
+  =============================== */
+  runBtn.onclick = () => {
+    if (socket) socket.close();
+
+    resetTerminal();
+
+    socket = new WebSocket("wss://terminal.codemania.fun");
+
+    socket.onopen = () => {
+      write(`▶ Running ${selectedLanguage.toUpperCase()}\n`);
+
+      socket.send(JSON.stringify({
+        language: selectedLanguage,
+        code: editor.getValue()
+      }));
+    };
+
+    socket.onmessage = (e) => {
+      write(e.data);
+      if (!e.data.endsWith("\n")) {
+        waitingForInput = true;
+        renderCursor();
+      }
+    };
+
+    socket.onclose = () => removeCursor();
+  };
+
+  /* ===============================
+     INLINE STDIN
+  =============================== */
+  window.addEventListener("keydown", (e) => {
+    if (!waitingForInput || !socket) return;
+
+    if (e.key === "Enter") {
+      write("\n");
+      socket.send(JSON.stringify({ stdin: inputBuffer }));
+      inputBuffer = "";
+      waitingForInput = false;
+      removeCursor();
+      e.preventDefault();
+      return;
+    }
+
+    if (e.key === "Backspace") {
+      inputBuffer = inputBuffer.slice(0, -1);
+      outputEl.textContent = outputEl.textContent.slice(0, -1);
+      renderCursor();
+      e.preventDefault();
+      return;
+    }
+
+    if (e.key.length === 1) {
+      inputBuffer += e.key;
+      write(e.key);
+      e.preventDefault();
+    }
+  });
+</script>
+
+</body>
+</html>

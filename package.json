@@ -1,0 +1,13 @@
+{
+  "name": "docker-test-runner",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "express": "^4.19.2",
+    "jsdom": "^28.1.0",
+    "ws": "^8.19.0"
+  }
+}

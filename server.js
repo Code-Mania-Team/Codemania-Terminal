@@ -75,8 +75,12 @@ setInterval(() => {
   }
 }, PRESENCE_PING_INTERVAL_MS);
 
-const TMP_DIR = path.resolve("./tmp");
-if (!fs.existsSync(TMP_DIR)) fs.mkdirSync(TMP_DIR);
+const TMP_DIR = "/tmp/codemania";
+
+if (!fs.existsSync(TMP_DIR)) {
+  fs.mkdirSync(TMP_DIR, { recursive: true });
+}
+
 
 /* ===============================
    LANGUAGE CONFIG
@@ -513,6 +517,7 @@ console.log("OUTPUT:", JSON.stringify(result));
 
         const filePath = path.join(tempDir, config.file);
         fs.writeFileSync(filePath, finalCode);
+        fs.chmodSync(filePath, 0o644);
 
         const docker = spawn("docker", [
           "run", "--rm", "-i",

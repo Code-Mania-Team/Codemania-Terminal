@@ -4,7 +4,7 @@ import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import e from "express";
+import { isDeepStrictEqual } from "util";
 
 const app = express();
 app.use(express.json());
@@ -496,23 +496,87 @@ async function runSingleTest(language, code, input = "", mode = "stdin", functio
            FUNCTION MODE (JS LESSONS)
         =============================== */
 
-        if (language === "javascript" && mode === "function") {
-
+        if (mode === "function") {
           if (!functionName) {
             return reject(new Error("functionName required for function mode"));
           }
 
-          finalCode = `
-const input = ${JSON.stringify(input)};
+          if (language === "javascript") {
+            finalCode = `
+const __rawInput = ${JSON.stringify(input)};
 
 /* USER CODE START */
 ${sanitized}
 /* USER CODE END */
 
-const result = ${functionName}(input);
+let __arg = __rawInput;
+if (typeof __rawInput === "string") {
+  const s = __rawInput.trim();
+  const looksJson =
+    s.startsWith("[") ||
+    s.startsWith("{") ||
+    s === "true" ||
+    s === "false" ||
+    s === "null" ||
+    /^-?\\d+(?:\\.\\d+)?$/.test(s) ||
+    (s.startsWith('"') && s.endsWith('"'));
+  if (looksJson) {
+    try {
+      __arg = JSON.parse(s);
+    } catch {
+      __arg = __rawInput;
+    }
+  }
+}
 
+const __fn = ${functionName};
+const result = Array.isArray(__arg) ? __fn(...__arg) : __fn(__arg);
 console.log("OUTPUT:", JSON.stringify(result));
 `;
+          } else if (language === "python") {
+            const inputJsonText = typeof input === "string" ? input : JSON.stringify(input);
+            // Embed as a Python string and parse via json.loads.
+            const inputJsonLiteral = JSON.stringify(String(inputJsonText));
+
+            finalCode = `
+ import json
+
+input_json = ${inputJsonLiteral}
+
+${sanitized}
+
+ arg = json.loads(input_json) if input_json.strip() else None
+ def __call(fn, value):
+   if isinstance(value, (list, tuple)):
+     return fn(*value)
+   if isinstance(value, dict):
+     return fn(**value)
+   return fn(value)
+
+ result = __call(${functionName}, arg)
+ print("OUTPUT:", json.dumps(result))
+ `;
+          } else if (language === "cpp") {
+            const inputText = typeof input === "string" ? input : JSON.stringify(input);
+            // Raw string literal; keep it simple (user parses as needed).
+            const safe = String(inputText).replace(/\)"/g, ')""');
+
+            finalCode = `
+#include <bits/stdc++.h>
+using namespace std;
+
+/* USER CODE START */
+${sanitized}
+/* USER CODE END */
+
+int main() {
+  std::string input = R"JSON(${safe})JSON";
+  auto result = ${functionName}(input);
+  std::cout << "OUTPUT: " << result;
+  return 0;
+}
+`;
+          }
         }
 
         const filePath = path.join(tempDir, config.file);
@@ -704,6 +768,37 @@ function matchRequiredFields(output, expected) {
   return true;
 }
 
+function isArrayOfPlainObjects(value) {
+  return (
+    Array.isArray(value) &&
+    value.every((v) => v && typeof v === "object" && !Array.isArray(v))
+  );
+}
+
+function parseMaybeJson(value) {
+  if (value === null || value === undefined) return value;
+  if (typeof value !== "string") return value;
+  const s = value.trim();
+  if (!s) return "";
+
+  const looksJson =
+    s.startsWith("[") ||
+    s.startsWith("{") ||
+    s === "true" ||
+    s === "false" ||
+    s === "null" ||
+    /^-?\d+(?:\.\d+)?$/.test(s) ||
+    (s.startsWith('"') && s.endsWith('"'));
+
+  if (!looksJson) return s;
+
+  try {
+    return JSON.parse(s);
+  } catch {
+    return s;
+  }
+}
+
 /* ===============================
    EXAM MODE (MULTIPLE TESTS)
 =============================== */
@@ -751,37 +846,36 @@ app.post("/exam/run", async (req, res) => {
 
       if (test.mode === "function") {
 
+        let cleanOutput = String(output ?? "").trim();
+        if (cleanOutput.startsWith("OUTPUT:")) {
+          cleanOutput = cleanOutput.replace(/^OUTPUT:\s*/, "");
+        }
+
+        const expected = parseMaybeJson(test.expected);
+
+        // Prefer JSON compare when possible.
         try {
-          let cleanOutput = output.trim();
-
-          // remove prefix added by wrapper
-          if (cleanOutput.startsWith("OUTPUT:")) {
-            cleanOutput = cleanOutput.replace(/^OUTPUT:\s*/, "");
-          }
-
           const parsedOutput = JSON.parse(cleanOutput);
 
-          const expected =
-            typeof test.expected === "string"
-              ? JSON.parse(test.expected)
-              : test.expected;
-
-          success = matchRequiredFields(parsedOutput, expected);
-          console.log("EXPECTED:",parsedOutput, expected);
-          console.log("SUCCESS: ",success);
-
+          if (isArrayOfPlainObjects(expected) && Array.isArray(parsedOutput)) {
+            // Back-compat partial matching for arrays of objects.
+            success = matchRequiredFields(parsedOutput, expected);
+          } else {
+            success = isDeepStrictEqual(parsedOutput, expected);
+          }
         } catch {
-          success = false;
+          // Fallback: treat as plain string output.
+          success =
+            normalizeValidationText(cleanOutput) ===
+            normalizeValidationText(String(expected ?? ""));
         }
 
       } else {
 
-        const outputNumbers = extractLastTwoNumbers(output);
-        const expectedNumbers = extractLastTwoNumbers(String(test.expected));
-
+        // STDIN mode: compare full output.
         success =
-          JSON.stringify(outputNumbers) ===
-          JSON.stringify(expectedNumbers);
+          normalizeValidationText(String(output ?? "")) ===
+          normalizeValidationText(String(test.expected ?? ""));
       }
 
       if (success) passed++;
@@ -789,7 +883,9 @@ app.post("/exam/run", async (req, res) => {
       results.push({
         test_index: i + 1,
         passed: success,
-        execution_time_ms: executionTime
+        execution_time_ms: executionTime,
+        stdout: String(output ?? ""),
+        expected: String(test.expected ?? "")
       });
     }
 

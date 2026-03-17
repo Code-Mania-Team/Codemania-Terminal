@@ -529,33 +529,49 @@ if (typeof __rawInput === "string") {
   }
 }
 
-const __fn = ${functionName};
-const result = Array.isArray(__arg) ? __fn(...__arg) : __fn(__arg);
-console.log("OUTPUT:", JSON.stringify(result));
-`;
+ const __fn = ${functionName};
+ const __args = (__arg && typeof __arg === "object" && !Array.isArray(__arg) && Array.isArray(__arg.args))
+   ? __arg.args
+   : null;
+ const result = __args ? __fn(...__args) : __fn(__arg);
+ console.log("OUTPUT:", JSON.stringify(result));
+ `;
           } else if (language === "python") {
             const inputJsonText = typeof input === "string" ? input : JSON.stringify(input);
             // Embed as a Python string and parse via json.loads.
             const inputJsonLiteral = JSON.stringify(String(inputJsonText));
 
             finalCode = `
- import json
+import json
 
 input_json = ${inputJsonLiteral}
 
 ${sanitized}
 
- arg = json.loads(input_json) if input_json.strip() else None
- def __call(fn, value):
-   if isinstance(value, (list, tuple)):
-     return fn(*value)
-   if isinstance(value, dict):
-     return fn(**value)
-   return fn(value)
+arg = None
+if isinstance(input_json, str) and input_json.strip():
+  try:
+    arg = json.loads(input_json)
+  except Exception:
+    arg = input_json
 
- result = __call(${functionName}, arg)
- print("OUTPUT:", json.dumps(result))
- `;
+def __call(fn, value):
+  # Avoid ambiguity: JSON arrays are passed as a single argument by default.
+  # To pass multiple positional/keyword args, wrap input as:
+  #   {"args": [...], "kwargs": {...}}
+  if isinstance(value, dict) and ("args" in value or "kwargs" in value):
+    args = value.get("args", [])
+    kwargs = value.get("kwargs", {})
+    if not isinstance(args, (list, tuple)):
+      args = [args]
+    if not isinstance(kwargs, dict):
+      kwargs = {}
+    return fn(*args, **kwargs)
+  return fn(value)
+
+result = __call(${functionName}, arg)
+print("OUTPUT:", json.dumps(result))
+`;
           } else if (language === "cpp") {
             const inputText = typeof input === "string" ? input : JSON.stringify(input);
             // Raw string literal; keep it simple (user parses as needed).

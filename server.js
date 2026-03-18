@@ -498,6 +498,30 @@ function matchesStdinExpected(output, expectedRaw) {
   return isDeepStrictEqual(tail, expectedNums);
 }
 
+function buildStdoutDisplay(output, expectedRaw) {
+  const raw = String(output ?? "");
+
+  // Preserve compiler/runtime diagnostics as-is.
+  if (raw.startsWith("COMPILE_ERROR")) return raw.trim();
+  if (hasExecutionError(raw, "python") || hasExecutionError(raw, "javascript") || hasExecutionError(raw, "cpp")) {
+    return raw.trim();
+  }
+
+  const outNorm = normalizeValidationText(raw);
+  const expNorm = normalizeValidationText(String(expectedRaw ?? ""));
+
+  // If expected is numeric-only, show just the designated numeric output (last N numbers).
+  if (isNumericOnlyExpected(expNorm)) {
+    const expectedNums = extractNumbers(expNorm);
+    const outNums = extractNumbers(outNorm);
+    if (expectedNums.length && outNums.length >= expectedNums.length) {
+      return outNums.slice(-expectedNums.length).join("\n");
+    }
+  }
+
+  return outNorm;
+}
+
 /* ===============================
    DOCKER EXECUTION (SINGLE TEST)
 =============================== */
@@ -531,7 +555,7 @@ async function runSingleTest(language, code, input = "", mode = "stdin", functio
 
           if (language === "javascript") {
             finalCode = `
-const __rawInput = ${JSON.stringify(input)};
+ const __rawInput = ${JSON.stringify(input)};
 
 /* USER CODE START */
 ${sanitized}
@@ -557,24 +581,37 @@ if (typeof __rawInput === "string") {
   }
 }
 
- const __fn = ${functionName};
- const __args = (__arg && typeof __arg === "object" && !Array.isArray(__arg) && Array.isArray(__arg.args))
-   ? __arg.args
-   : null;
- const result = __args ? __fn(...__args) : __fn(__arg);
- console.log("OUTPUT:", JSON.stringify(result));
- `;
+  const __fnName = ${JSON.stringify(String(functionName))};
+  let __fn = null;
+  try {
+    // functionName is server-controlled (from test case metadata)
+    __fn = eval(__fnName);
+  } catch {
+    __fn = null;
+  }
+  if (typeof __fn !== "function") {
+    console.log(
+      "FUNCTION_NOT_FOUND: " + __fnName + " (define it in your code or switch the test case mode to stdin)"
+    );
+    process.exit(0);
+  }
+  const __args = (__arg && typeof __arg === "object" && !Array.isArray(__arg) && Array.isArray(__arg.args))
+    ? __arg.args
+    : null;
+  const result = __args ? __fn(...__args) : __fn(__arg);
+  console.log("OUTPUT:", JSON.stringify(result));
+  `;
           } else if (language === "python") {
             const inputJsonText = typeof input === "string" ? input : JSON.stringify(input);
             // Embed as a Python string and parse via json.loads.
             const inputJsonLiteral = JSON.stringify(String(inputJsonText));
 
-            finalCode = `
-import json
-
-input_json = ${inputJsonLiteral}
-
-${sanitized}
+             finalCode = `
+ import json
+ 
+ input_json = ${inputJsonLiteral}
+ 
+ ${sanitized}
 
 arg = None
 if isinstance(input_json, str) and input_json.strip():
@@ -597,9 +634,13 @@ def __call(fn, value):
     return fn(*args, **kwargs)
   return fn(value)
 
-result = __call(${functionName}, arg)
-print("OUTPUT:", json.dumps(result))
-`;
+ fn = globals().get(${JSON.stringify(String(functionName))})
+ if not callable(fn):
+   print("FUNCTION_NOT_FOUND:", ${JSON.stringify(String(functionName))})
+ else:
+   result = __call(fn, arg)
+   print("OUTPUT:", json.dumps(result))
+ `;
           } else if (language === "cpp") {
             const inputText = typeof input === "string" ? input : JSON.stringify(input);
             // Raw string literal; keep it simple (user parses as needed).
@@ -935,6 +976,7 @@ app.post("/exam/run", async (req, res) => {
         passed: success,
         execution_time_ms: executionTime,
         stdout: String(output ?? ""),
+        stdout_display: test.mode === "stdin" ? buildStdoutDisplay(output, expectedRaw) : String(output ?? "").trim(),
         expected: String(expectedRaw ?? "")
       });
     }

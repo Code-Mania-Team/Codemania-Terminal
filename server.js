@@ -470,6 +470,34 @@ function extractLastTwoNumbers(text) {
   return nums.slice(-2);
 }
 
+function isNumericOnlyExpected(expectedRaw) {
+  const s = String(expectedRaw ?? "").trim();
+  if (!s) return false;
+  // Only numbers separated by whitespace/newlines.
+  return /^-?\d+(?:\s+-?\d+)*\s*$/.test(s);
+}
+
+function matchesStdinExpected(output, expectedRaw) {
+  const outNorm = normalizeValidationText(String(output ?? ""));
+  const expNorm = normalizeValidationText(String(expectedRaw ?? ""));
+
+  // First: strict match (original behavior).
+  if (outNorm === expNorm) return true;
+
+  // Back-compat: allow extra prompts/text, match by trailing numbers.
+  // This supports solutions that print input prompts or extra lines.
+  if (!isNumericOnlyExpected(expNorm)) return false;
+
+  const expectedNums = extractNumbers(expNorm);
+  if (!expectedNums.length) return false;
+
+  const outNums = extractNumbers(outNorm);
+  if (outNums.length < expectedNums.length) return false;
+
+  const tail = outNums.slice(-expectedNums.length);
+  return isDeepStrictEqual(tail, expectedNums);
+}
+
 /* ===============================
    DOCKER EXECUTION (SINGLE TEST)
 =============================== */
@@ -839,6 +867,14 @@ app.post("/exam/run", async (req, res) => {
     for (let i = 0; i < testCases.length; i++) {
       const test = testCases[i];
 
+      const expectedRaw =
+        test?.expected ??
+        test?.expected_output ??
+        test?.expectedOutput ??
+        test?.output ??
+        test?.expectedResult ??
+        "";
+
       const start = Date.now();
 
       try{
@@ -867,7 +903,7 @@ app.post("/exam/run", async (req, res) => {
           cleanOutput = cleanOutput.replace(/^OUTPUT:\s*/, "");
         }
 
-        const expected = parseMaybeJson(test.expected);
+        const expected = parseMaybeJson(expectedRaw);
 
         // Prefer JSON compare when possible.
         try {
@@ -889,9 +925,7 @@ app.post("/exam/run", async (req, res) => {
       } else {
 
         // STDIN mode: compare full output.
-        success =
-          normalizeValidationText(String(output ?? "")) ===
-          normalizeValidationText(String(test.expected ?? ""));
+        success = matchesStdinExpected(output, expectedRaw);
       }
 
       if (success) passed++;
@@ -901,7 +935,7 @@ app.post("/exam/run", async (req, res) => {
         passed: success,
         execution_time_ms: executionTime,
         stdout: String(output ?? ""),
-        expected: String(test.expected ?? "")
+        expected: String(expectedRaw ?? "")
       });
     }
 
@@ -932,7 +966,7 @@ app.post("/dom/run", async (req, res) => {
 
     const { base_html, user_code, validation } = req.body;
 
-    if (!base_html || typeof user_code !== "string") {
+    if (typeof base_html !== "string" || typeof user_code !== "string") {
       return res.status(400).json({ error: "Invalid payload" });
     }
 

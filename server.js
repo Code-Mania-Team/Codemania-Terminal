@@ -601,50 +601,51 @@ if (typeof __rawInput === "string") {
   const result = __args ? __fn(...__args) : __fn(__arg);
   console.log("OUTPUT:", JSON.stringify(result));
   `;
-          } else if (language === "python") {
-            const inputJsonText = typeof input === "string" ? input : JSON.stringify(input);
-            // Embed as a Python string and parse via json.loads.
-            const inputJsonLiteral = JSON.stringify(String(inputJsonText));
+           } else if (language === "python") {
+             const inputJsonText = typeof input === "string" ? input : JSON.stringify(input);
+             // Embed as a Python string and parse via json.loads.
+             const inputJsonLiteral = JSON.stringify(String(inputJsonText));
 
-             finalCode = `
- import json
- 
- input_json = ${inputJsonLiteral}
- 
- ${sanitized}
-
-arg = None
-if isinstance(input_json, str) and input_json.strip():
-  try:
-    arg = json.loads(input_json)
-  except Exception:
-    arg = input_json
-
-def __call(fn, value):
-  # Avoid ambiguity: JSON arrays are passed as a single argument by default.
-  # To pass multiple positional/keyword args, wrap input as:
-  #   {"args": [...], "kwargs": {...}}
-  if isinstance(value, dict) and ("args" in value or "kwargs" in value):
-    args = value.get("args", [])
-    kwargs = value.get("kwargs", {})
-    if not isinstance(args, (list, tuple)):
-      args = [args]
-    if not isinstance(kwargs, dict):
-      kwargs = {}
-    return fn(*args, **kwargs)
-  return fn(value)
-
- fn = globals().get(${JSON.stringify(String(functionName))})
- if not callable(fn):
-   print("FUNCTION_NOT_FOUND:", ${JSON.stringify(String(functionName))})
- else:
-   result = __call(fn, arg)
-   print("OUTPUT:", json.dumps(result))
- `;
-          } else if (language === "cpp") {
-            const inputText = typeof input === "string" ? input : JSON.stringify(input);
-            // Raw string literal; keep it simple (user parses as needed).
-            const safe = String(inputText).replace(/\)"/g, ')""');
+             finalCode = [
+               "import json",
+               "",
+               `input_json = ${inputJsonLiteral}`,
+               "",
+               String(sanitized ?? ""),
+               "",
+               "arg = None",
+               "if isinstance(input_json, str) and input_json.strip():",
+               "  try:",
+               "    arg = json.loads(input_json)",
+               "  except Exception:",
+               "    arg = input_json",
+               "",
+               "def __call(fn, value):",
+               "  # Avoid ambiguity: JSON arrays are passed as a single argument by default.",
+               "  # To pass multiple positional/keyword args, wrap input as:",
+               "  #   {\"args\": [...], \"kwargs\": {...}}",
+               "  if isinstance(value, dict) and (\"args\" in value or \"kwargs\" in value):",
+               "    args = value.get(\"args\", [])",
+               "    kwargs = value.get(\"kwargs\", {})",
+               "    if not isinstance(args, (list, tuple)):",
+               "      args = [args]",
+               "    if not isinstance(kwargs, dict):",
+               "      kwargs = {}",
+               "    return fn(*args, **kwargs)",
+               "  return fn(value)",
+               "",
+               `fn = globals().get(${JSON.stringify(String(functionName))})`,
+               "if not callable(fn):",
+               `  print(\"FUNCTION_NOT_FOUND:\", ${JSON.stringify(String(functionName))})`,
+               "else:",
+               "  result = __call(fn, arg)",
+               "  print(\"OUTPUT:\", json.dumps(result))",
+               "",
+             ].join("\n");
+           } else if (language === "cpp") {
+             const inputText = typeof input === "string" ? input : JSON.stringify(input);
+             // Raw string literal; keep it simple (user parses as needed).
+             const safe = String(inputText).replace(/\)"/g, ')""');
 
             finalCode = `
 #include <bits/stdc++.h>

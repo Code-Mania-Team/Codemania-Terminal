@@ -595,9 +595,11 @@ if (typeof __rawInput === "string") {
     );
     process.exit(0);
   }
-  const __args = (__arg && typeof __arg === "object" && !Array.isArray(__arg) && Array.isArray(__arg.args))
-    ? __arg.args
-    : null;
+  // Accept either {"args": [...]} OR a raw JSON array [...] as the argument list.
+  const __args =
+    (__arg && typeof __arg === "object" && !Array.isArray(__arg) && Array.isArray(__arg.args))
+      ? __arg.args
+      : (Array.isArray(__arg) ? __arg : null);
   const result = __args ? __fn(...__args) : __fn(__arg);
   console.log("OUTPUT:", JSON.stringify(result));
   `;
@@ -624,6 +626,9 @@ if (typeof __rawInput === "string") {
                "  # Avoid ambiguity: JSON arrays are passed as a single argument by default.",
                "  # To pass multiple positional/keyword args, wrap input as:",
                "  #   {\"args\": [...], \"kwargs\": {...}}",
+               "  # CodeMania: also allow passing a raw JSON array as positional args.",
+               "  if isinstance(value, (list, tuple)):",
+               "    return fn(*value)",
                "  if isinstance(value, dict) and (\"args\" in value or \"kwargs\" in value):",
                "    args = value.get(\"args\", [])",
                "    kwargs = value.get(\"kwargs\", {})",

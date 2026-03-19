@@ -351,6 +351,25 @@ function sanitizeCode(language, code) {
   return clean;
 }
 
+function killContainerBestEffort(containerName) {
+  if (!containerName) return;
+  try {
+    const killer = spawn("docker", ["kill", containerName]);
+    killer.on?.("error", () => {});
+  } catch {
+    // ignore
+  }
+
+  // If the docker client process is killed, --rm may not run.
+  // Force remove to avoid orphaned infinite-loop containers.
+  try {
+    const remover = spawn("docker", ["rm", "-f", containerName]);
+    remover.on?.("error", () => {});
+  } catch {
+    // ignore
+  }
+}
+
   const handleSubmit = async () => {
     if (isRunning || !attemptId) return;
 
@@ -739,8 +758,14 @@ int main() {
         fs.writeFileSync(filePath, finalCode);
         fs.chmodSync(filePath, 0o644);
 
+        const containerName = `codemania-test-${crypto.randomUUID()}`;
+
         const docker = spawn("docker", [
           "run", "--rm", "-i",
+          "--name", containerName,
+          "--init",
+          "--log-driver=none",
+          "--stop-timeout", "0",
           "--network", "none",
           "--read-only",
           "--pids-limit", "64",
@@ -762,7 +787,12 @@ int main() {
         let output = "";
 
         const timeout = setTimeout(() => {
-          docker.kill("SIGKILL");
+          killContainerBestEffort(containerName);
+          try {
+            docker.kill("SIGKILL");
+          } catch {
+            // ignore
+          }
         }, 10000);
 
         docker.stdout.on("data", d => {
@@ -770,7 +800,12 @@ int main() {
           outputSize += d.length;
 
           if (outputSize > MAX_OUTPUT) {
-            docker.kill("SIGKILL");
+            killContainerBestEffort(containerName);
+            try {
+              docker.kill("SIGKILL");
+            } catch {
+              // ignore
+            }
             output = "Output limit exceeded";
             return;
           }
@@ -794,6 +829,8 @@ int main() {
 
         docker.on("error", err => {
           clearTimeout(timeout);
+
+          killContainerBestEffort(containerName);
 
           try {
             fs.rmSync(tempDir, { recursive: true, force: true });
@@ -837,8 +874,14 @@ async function runDomValidation(base_html, user_code, validation) {
         validation
       });
 
+      const containerName = `codemania-dom-${crypto.randomUUID()}`;
+
       const docker = spawn("docker", [
         "run", "--rm", "-i",
+        "--name", containerName,
+        "--init",
+        "--log-driver=none",
+        "--stop-timeout", "0",
 
         "--network", "none",
         "--read-only",
@@ -857,7 +900,12 @@ async function runDomValidation(base_html, user_code, validation) {
       let errorOutput = "";
 
       const timeout = setTimeout(() => {
-        docker.kill("SIGKILL");
+        killContainerBestEffort(containerName);
+        try {
+          docker.kill("SIGKILL");
+        } catch {
+          // ignore
+        }
         reject(new Error("DOM validation timeout"));
       }, 30000);
 
@@ -887,6 +935,7 @@ async function runDomValidation(base_html, user_code, validation) {
 
       docker.on("error", err => {
         clearTimeout(timeout);
+        killContainerBestEffort(containerName);
         reject(err);
       });
 
@@ -1179,6 +1228,7 @@ wss.on("connection", (ws) => {
   let tempDir = null;
   let timeout = null;
   let outputSize = 0;
+  let containerName = null;
 
   ws.__isAlive = true;
   ws.on("pong", () => {
@@ -1191,7 +1241,14 @@ wss.on("connection", (ws) => {
     if (timeout) clearTimeout(timeout);
 
     timeout = setTimeout(() => {
-      if (docker) docker.kill("SIGKILL");
+      if (containerName) killContainerBestEffort(containerName);
+      if (docker) {
+        try {
+          docker.kill("SIGKILL");
+        } catch {
+          // ignore
+        }
+      }
     }, EXEC_TIMEOUT);
   }
 
@@ -1254,8 +1311,14 @@ wss.on("connection", (ws) => {
         await enqueueExercise(() =>
           new Promise((resolve, reject) => {
 
+            containerName = `codemania-ws-${crypto.randomUUID()}`;
+
             docker = spawn("docker", [
               "run", "--rm", "-i",
+              "--name", containerName,
+              "--init",
+              "--log-driver=none",
+              "--stop-timeout", "0",
               "--network", "none",
               "--read-only",
               "--pids-limit", "64",
@@ -1326,7 +1389,14 @@ wss.on("connection", (ws) => {
         ws.__isPresence = false;
         broadcastPresence();
       }
-      if (docker) docker.kill("SIGKILL");
+      if (containerName) killContainerBestEffort(containerName);
+      if (docker) {
+        try {
+          docker.kill("SIGKILL");
+        } catch {
+          // ignore
+        }
+      }
       if (timeout) clearTimeout(timeout);
       if (tempDir) fs.rmSync(tempDir, { recursive: true, force: true });
     } catch (err) {

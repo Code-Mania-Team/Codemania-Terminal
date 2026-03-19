@@ -81,6 +81,73 @@ if (!fs.existsSync(TMP_DIR)) {
   fs.mkdirSync(TMP_DIR, { recursive: true });
 }
 
+// Auto-clean temp workspace to prevent ENOSPC.
+// These folders are safe to delete because they only contain per-run code.
+const TMP_TTL_MS = Number(process.env.CODEMANIA_TMP_TTL_MS || 1000 * 60 * 30); // 30 minutes
+const TMP_MAX_ENTRIES = Number(process.env.CODEMANIA_TMP_MAX_ENTRIES || 2000);
+const TMP_CLEAN_INTERVAL_MS = Number(process.env.CODEMANIA_TMP_CLEAN_INTERVAL_MS || 1000 * 60 * 5); // 5 minutes
+
+function cleanupTmpDirSync({ maxAgeMs = TMP_TTL_MS, maxEntries = TMP_MAX_ENTRIES } = {}) {
+  try {
+    const now = Date.now();
+    const names = fs.readdirSync(TMP_DIR, { withFileTypes: true });
+    const entries = [];
+
+    for (const d of names) {
+      if (!d || !d.name) continue;
+      const full = path.join(TMP_DIR, d.name);
+      let st;
+      try {
+        st = fs.statSync(full);
+      } catch {
+        continue;
+      }
+      const t = Number(st.mtimeMs || st.ctimeMs || 0);
+      entries.push({ full, timeMs: t || 0 });
+
+      if (maxAgeMs && t && now - t > maxAgeMs) {
+        try {
+          fs.rmSync(full, { recursive: true, force: true });
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    if (maxEntries && entries.length > maxEntries) {
+      entries.sort((a, b) => a.timeMs - b.timeMs);
+      const extra = entries.length - maxEntries;
+      for (let i = 0; i < extra; i++) {
+        try {
+          fs.rmSync(entries[i].full, { recursive: true, force: true });
+        } catch {
+          // ignore
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function mkdirTempDirOrCleanup(tempDir) {
+  try {
+    fs.mkdirSync(tempDir);
+    return;
+  } catch (err) {
+    if (err && err.code === "ENOSPC") {
+      cleanupTmpDirSync();
+      fs.mkdirSync(tempDir);
+      return;
+    }
+    throw err;
+  }
+}
+
+// Periodic background cleanup (best-effort)
+cleanupTmpDirSync();
+setInterval(() => cleanupTmpDirSync(), TMP_CLEAN_INTERVAL_MS).unref?.();
+
 
 /* ===============================
    LANGUAGE CONFIG
@@ -540,7 +607,7 @@ async function runSingleTest(language, code, input = "", mode = "stdin", functio
         const sanitized = sanitizeCode(language, code);
 
         const tempDir = path.join(TMP_DIR, crypto.randomUUID());
-        fs.mkdirSync(tempDir);
+        mkdirTempDirOrCleanup(tempDir);
 
         let finalCode = sanitized;
 
@@ -1180,7 +1247,7 @@ wss.on("connection", (ws) => {
         const sanitized = sanitizeCode(language, code);
 
         tempDir = path.join(TMP_DIR, crypto.randomUUID());
-        fs.mkdirSync(tempDir);
+        mkdirTempDirOrCleanup(tempDir);
 
         fs.writeFileSync(path.join(tempDir, lang.file), sanitized);
 

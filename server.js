@@ -706,12 +706,18 @@ if (typeof __rawInput === "string") {
       "FUNCTION_NOT_FOUND: " + __fnName + " (define it in your code or switch the test case mode to stdin)"
     );
   } else {
-  // Accept either {"args": [...]} OR a raw JSON array [...] as the argument list.
+  // Explicit positional args: {"args": [...]}.
   const __args =
     (__arg && typeof __arg === "object" && !Array.isArray(__arg) && Array.isArray(__arg.args))
       ? __arg.args
-      : (Array.isArray(__arg) ? __arg : null);
-    const result = __args ? __fn(...__args) : __fn(__arg);
+      : null;
+
+  // Raw JSON arrays default to ONE argument (the array itself).
+  // For multi-arg functions (arity > 1), allow spreading for backwards compatibility.
+  const __shouldSpreadRawArray = Array.isArray(__arg) && Number(__fn.length || 0) > 1;
+  const result = __args
+    ? __fn(...__args)
+    : (__shouldSpreadRawArray ? __fn(...__arg) : __fn(__arg));
     console.log("OUTPUT:", JSON.stringify(result));
   }
    `;

@@ -660,6 +660,11 @@ async function runSingleTest(language, code, input = "", mode = "stdin", functio
           }
 
           if (language === "javascript") {
+            const fnNameString = String(functionName);
+            const safeFnIdentifier = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(fnNameString)
+              ? fnNameString
+              : null;
+
             finalCode = `
  const __rawInput = ${JSON.stringify(input)};
 
@@ -688,11 +693,14 @@ if (typeof __rawInput === "string") {
 }
 
   const __fnName = ${JSON.stringify(String(functionName))};
+  const __fnFromIdentifier = ${safeFnIdentifier
+    ? `(typeof ${safeFnIdentifier} === "function" ? ${safeFnIdentifier} : null)`
+    : "null"};
   // Avoid eval() so this wrapper stays sanitizer-friendly.
   const __root = (typeof globalThis !== "undefined" && globalThis)
     ? globalThis
     : (typeof self !== "undefined" && self ? self : null);
-  const __fn = __root ? __root[__fnName] : null;
+  const __fn = __fnFromIdentifier || (__root ? __root[__fnName] : null);
   if (typeof __fn !== "function") {
     console.log(
       "FUNCTION_NOT_FOUND: " + __fnName + " (define it in your code or switch the test case mode to stdin)"

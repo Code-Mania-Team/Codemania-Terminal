@@ -411,6 +411,26 @@ function normalizeOutput(text) {
     .trim();
 }
 
+function hasExecutionError(output, language) {
+  const out = String(output || "");
+  const patterns = [
+    "Traceback",
+    "SyntaxError",
+    "NameError",
+    "TypeError",
+    "IndentationError",
+    "ReferenceError",
+    "fatal error",
+    "undefined reference",
+    "Segmentation fault",
+    "COMPILE_ERROR",
+    "error:",
+  ];
+
+  const lowered = out.toLowerCase();
+  return patterns.some((p) => lowered.includes(String(p).toLowerCase()));
+}
+
 function normalizeValidationText(text) {
   return String(text ?? "")
     .replace(/\r\n/g, "\n")
